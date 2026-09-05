@@ -3,6 +3,7 @@
  * Mock ExtensionAPI + globalThis.fetch; verifies wire replay byte-identity,
  * instruction assembly, usage mapping, all fallback branches, anthropic path.
  */
+const fs = require("fs");
 const path = require("path");
 const { createRequire } = require("module");
 
@@ -50,7 +51,7 @@ function check(name, cond, extra) {
 		registerCommand: (n, o) => (commands[n] = o),
 	};
 	factory(pi);
-	check("handlers: before_provider_request/headers, session_before_compact, session_compact", ["before_provider_request", "before_provider_headers", "session_before_compact", "session_compact"].every((n) => handlers[n]?.length));
+	check("handlers: before_provider_request/headers, session_before_compact, session_compact, session_start", ["before_provider_request", "before_provider_headers", "session_before_compact", "session_compact", "session_start"].every((n) => handlers[n]?.length));
 	check("command 'cache-compact' registered", !!commands["cache-compact"]);
 	const emit = (n, e, c = ctx) => handlers[n]?.forEach((f) => f(e, c));
 
@@ -272,6 +273,22 @@ function check(name, cond, extra) {
 	await commands["cache-compact"].handler("off", ctx);
 	check("off → default compaction (no fetch)", (await handlers.session_before_compact[0](event, aCtx)) === undefined);
 	await commands["cache-compact"].handler("on", ctx);
+
+	// ---- 6. auto mode + session-start banner ----
+	emit("session_start", { type: "session_start", reason: "startup" }, ctx);
+	check("session_start banner when enabled", notifications[notifications.length - 1][1].includes("cache-compact: enabled"));
+	await commands["cache-compact"].handler("off", ctx);
+	emit("session_start", { type: "session_start", reason: "startup" }, ctx);
+	check("no banner when off", !notifications[notifications.length - 1][1].includes("cache-compact: enabled"));
+	await commands["cache-compact"].handler("auto", ctx);
+	check("auto acknowledged", notifications[notifications.length - 1][1].includes("auto"));
+	emit("session_start", { type: "session_start", reason: "reload" }, ctx);
+	check("banner again in auto mode (after reload)", notifications[notifications.length - 1][1].includes("cache-compact: enabled"));
+	emit("before_provider_request", { type: "before_provider_request", payload: chatBody }); // re-capture (consumed by earlier replays)
+	await commands["cache-compact"].handler("status", ctx);
+	check("status reports mode auto + capture", /auto/.test(notifications[notifications.length - 1][1]) && /qwen3\.8-27b/.test(notifications[notifications.length - 1][1]));
+	const src = fs.readFileSync(path.join(__dirname, "..", "cache-compact.ts"), "utf8");
+	check("source has session_start / auto / mode flag", src.includes('pi.on("session_start"') && src.includes('"auto"') && src.includes('mode: "auto" | "on" | "off"'));
 
 	console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL OK");
 	process.exit(failures ? 1 : 0);

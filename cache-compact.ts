@@ -28,8 +28,10 @@
  * CompactionEntry pi writes from the returned summary.
  *
  * Commands:
- *   /cache-compact        — capture state + last replay stats (and on/off)
- *   /cache-compact on|off — toggle the interception
+ *   /cache-compact             — status (mode, capture, last replay stats)
+ *   /cache-compact auto|on|off — mode: auto (default: enabled at session start
+ *                                and after /reload, banner shown then) / on /
+ *                                off (until next /reload)
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -61,7 +63,7 @@ interface ReplayStats {
 }
 
 export default function cacheCompact(pi: ExtensionAPI): void {
-	let disabled = false;
+	let mode: "auto" | "on" | "off" = "auto"; // "auto": enabled at session start / after /reload
 	let lastWire: CapturedWire | null = null;
 	let lastHeaders: Record<string, string> = {};
 	let lastReplay: ReplayStats | null = null;
@@ -150,7 +152,7 @@ export default function cacheCompact(pi: ExtensionAPI): void {
 	// ------------------------------------------------ the interception
 
 	pi.on("session_before_compact", async (event, ctx) => {
-		if (disabled) return;
+		if (mode === "off") return;
 		const prep = event.preparation;
 		const notify = (msg: string, kind: "info" | "warning" = "warning") => {
 			try {
@@ -319,25 +321,79 @@ export default function cacheCompact(pi: ExtensionAPI): void {
 		}
 	});
 
+	// ------------------------------------------------ session-start banner
+
+	const banner = (ctx: ExtensionContext): void => {
+		try {
+			ctx.ui.notify(
+				"cache-compact: enabled — /compact replays the captured request through the server's prompt cache (manage: /cache-compact auto|on|off|status)",
+				"info",
+			);
+		} catch {
+			/* headless */
+		}
+	};
+
+	pi.on("session_start", (_event, ctx) => {
+		if (mode === "off") return;
+		banner(ctx);
+	});
+
 	// ------------------------------------------------ diagnostics command
 
 	const fmtK = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 	pi.registerCommand("cache-compact", {
-		description: "Cache-friendly compaction: /cache-compact [on|off]",
+		description: "Cache-friendly compaction: /cache-compact [auto|on|off|status] (default: auto)",
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim().toLowerCase();
+			if (arg === "auto") {
+				mode = "auto";
+				try {
+					ctx.ui.notify("cache-compact: auto — enabled now, at session start and after /reload (banner shown then); disable with: /cache-compact off", "info");
+				} catch {
+					/* headless */
+				}
+				return;
+			}
 			if (arg === "on") {
-				disabled = false;
-				ctx.ui.notify("cache-compact: on", "info");
+				mode = "on";
+				banner(ctx);
 				return;
 			}
 			if (arg === "off") {
-				disabled = true;
-				ctx.ui.notify("cache-compact: off (default compaction in use)", "info");
+				mode = "off";
+				try {
+					ctx.ui.notify("cache-compact: off (default compaction in use; resets to auto after /reload)", "info");
+				} catch {
+					/* headless */
+				}
 				return;
 			}
-			const state = disabled ? "off" : "on";
+			if (arg === "status") {
+				const state = mode;
+				if (!lastWire) {
+					try {
+						ctx.ui.notify(`cache-compact: ${state}; no captured request yet (send a prompt first)`, "info");
+					} catch {
+						/* headless */
+					}
+					return;
+				}
+				const body = lastWire.body as Record<string, any>;
+				const nMsg = Array.isArray(body.messages) ? body.messages.length : 0;
+				const approxTok = Math.round(JSON.stringify(body).length / 4);
+				const age = Math.round((Date.now() - lastWire.at) / 1000);
+				let line = `cache-compact: ${state}; capture: ${lastWire.modelId}, ${nMsg} msgs, ~${fmtK(approxTok)} tok, max_tokens=${body.max_tokens ?? body.max_completion_tokens ?? "?"}, ${age}s old`;
+				if (lastReplay) line += `; last replay: ${fmtK(lastReplay.cached)} cached / ${fmtK(lastReplay.fresh)} fresh (${lastReplay.hitPct.toFixed(1)}%)`;
+				try {
+					ctx.ui.notify(line, "info");
+				} catch {
+					/* headless */
+				}
+				return;
+			}
+			const state = mode;
 			if (!lastWire) {
 				ctx.ui.notify(`cache-compact: ${state}; no captured request yet (send a prompt first)`, "info");
 				return;
