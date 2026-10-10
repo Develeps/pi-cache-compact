@@ -189,6 +189,7 @@ export default function cacheCompact(pi: ExtensionAPI): void {
 
 			// -- build the replay body (prefix byte-identical, instruction appended) --
 			const replay: Record<string, unknown> = { ...body, stream: false };
+			delete replay.stream_options; // non-streaming replay — OpenAI rejects stream_options unless stream=true
 			if (isAnthropic) {
 				delete replay.thinking;
 				delete replay.max_thinking_tokens;

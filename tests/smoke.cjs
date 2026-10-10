@@ -66,6 +66,8 @@ function check(name, cond, extra) {
 		tools: [{ type: "function", function: { name: "read", parameters: {} } }],
 		max_tokens: 4096,
 		temperature: 0.3,
+		stream: true,
+		stream_options: { include_usage: true },
 	};
 	emit("before_provider_request", { type: "before_provider_request", payload: chatBody });
 	emit("before_provider_headers", { type: "before_provider_headers", headers: { authorization: "Bearer sk-test", "x-pi": "1" } });
@@ -115,6 +117,7 @@ function check(name, cond, extra) {
 	check("prefix byte-identical: first 3 messages equal capture", JSON.stringify(sent.messages.slice(0, 3)) === JSON.stringify(chatBody.messages));
 	check("model/tools/temperature preserved", sent.model === "qwen3.8-27b" && sent.tools?.[0]?.function?.name === "read" && sent.temperature === 0.3);
 	check("stream forced false", sent.stream === false);
+	check("stream_options dropped (non-streaming replay)", sent.stream_options === undefined);
 	check("exactly one instruction appended", sent.messages.length === 4 && sent.messages[3].role === "user");
 	const instr = sent.messages[3].content;
 	check("instruction: compactor format + OLD SUMMARY + custom + file lists + last-user rule", ["context compactor", "## Goal", "OLD SUMMARY TEXT", "focus on networking", "<read-files>", "a.ts", "<modified-files>", "b.ts", "LAST user message"].every((s) => instr.includes(s)));
